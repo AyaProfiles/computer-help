@@ -8,12 +8,13 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
 
-$Version   = '2026.11.08.3'
+$Version   = '2026.11.08.4'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
 $History   = Join-Path $Dir 'history.csv'
 $DoneFile  = Join-Path $Dir 'requests-done.txt'
+$Inventory = Join-Path $Dir 'folders.json'
 $PublicKey = '<RSAKeyValue><Modulus>u5MDLLOaAuRnhR2cR9Gn9GB+cOnKjL3+IHiOYV8GflxGN3miag4S/yBPsaGfAdWsMpPVbagUBoy4OXkxDTmT9ddsO0o7RYJvJrcKHZ0RvLKh0DdACsmcHEPoMVrwpy21E3UeMNWUsKFG67s12x+if6aErMuAMMI45hIhxpK5Jgs3DEzGgtvrvCXv0xPpVo2WjrtwuizIa+9HJcu60POLIRvNMTINqkoO9mNfsVEqlYcbjiwt3Pv28AQxoT0m0wk4wWmZj6IOj8KQUgxTKkRDpPbNLbw/AfkliSrqyrMwWpzCiePP4Gp9pstihwKyzJQaXkTcOvdwO3FaKuiae9SrIPNYWWtgkR+dX8nNbGT521WKPjKIEp6mhZWrKejMaxNCeJ2f+EPphPw+XPYM4MQdcaag5SfGLC5CJyPloMGXSxKiMCD307Q5mR9bP5e8Cwpp1ZEpeK1yv/+NCEijqJHLA30NHIUv7xHP6vyhZ0kb+T5GBQ6eDE9vK4Uihf677Xnd</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $Dir 'config.json'
@@ -116,13 +117,17 @@ function Save-Sample {
              } | Sort-Object MB -Descending | Select-Object -First 1
     $disk  = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
     $online = Test-Connection 1.1.1.1 -Count 1 -Quiet
+    $wifi  = (netsh wlan show interfaces | Select-String '^\s*Signal\s*:\s*(\d+)%' | Select-Object -First 1).Matches.Groups[1].Value
     # Whole numbers only, so no locale can put a comma inside a CSV field.
     $line = @((Get-Date -Format 'yyyy-MM-dd HH:mm'), $cpu,
               [math]::Round(100 * (1 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize)),
               [math]::Round($disk.FreeSpace / 1GB),
               ($top.Name -replace '#\d+$', ''), [math]::Round($top.PercentProcessorTime / $cores),
-              $mem.Name, [math]::Round($mem.MB), [int]$online) -join ','
-    if (-not (Test-Path $History)) { Set-Content $History 'Time,CpuPct,MemUsedPct,DiskFreeGB,TopCpuProgram,TopCpuPct,TopMemProgram,TopMemMB,Online' }
+              $mem.Name, [math]::Round($mem.MB), [int]$online, $wifi) -join ','
+    # Older files lack the Wi-Fi column: give them the new header, old rows just leave it empty.
+    $header = 'Time,CpuPct,MemUsedPct,DiskFreeGB,TopCpuProgram,TopCpuPct,TopMemProgram,TopMemMB,Online,WifiPct'
+    if (-not (Test-Path $History)) { Set-Content $History $header }
+    elseif ((Get-Content $History -TotalCount 1) -ne $header) { $all = @(Get-Content $History); $all[0] = $header; Set-Content $History $all }
     Add-Content $History $line
     if ((Get-Item $History).Length -gt 400KB) {
         $all = Get-Content $History
@@ -147,6 +152,36 @@ function Get-HistorySummary {
     $down = @($rows | Where-Object { $_.Online -eq '0' })
     "Internet down: $($down.Count) of $($rows.Count) checks$(if ($down) { ", last at $($down[-1].Time)" })"
     "C: free space: $($rows[0].DiskFreeGB) GB at the start, $($rows[-1].DiskFreeGB) GB now"
+    $sig = @($rows | Where-Object { "$($_.WifiPct)" -match '^\d+$' })
+    if ($sig) {
+        $weak = @($sig | Where-Object { [int]$_.WifiPct -lt 40 })
+        "Wi-Fi signal: average {0:N0}%, weak (under 40%) {1} times{2}" -f ($sig | ForEach-Object { [int]$_.WifiPct } | Measure-Object -Average).Average, $weak.Count, $(if ($weak) { ", last at $($weak[-1].Time)" })
+    }
+}
+
+# ---- Their folders (Desktop, Documents...: where they really are, sizes once a day) ----
+function Get-UserFolders {
+    $p = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+    $folders = [ordered]@{ Desktop = $p.Desktop; Documents = $p.Personal; Downloads = $p.'{374DE290-123F-4565-9164-39C4925E467B}'
+                           Pictures = $p.'My Pictures'; Music = $p.'My Music'; Videos = $p.'My Video' }
+    foreach ($k in @($folders.Keys)) { $folders[$k] = [Environment]::ExpandEnvironmentVariables("$($folders[$k])") }
+    $folders
+}
+
+# Counting every file is slow on old disks, so the recorder does it once a day.
+function Save-Inventory {
+    $list = foreach ($f in (Get-UserFolders).GetEnumerator()) {
+        $m = Get-ChildItem $f.Value -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum
+        [pscustomobject]@{ Name = $f.Key; Files = $m.Count; GB = [math]::Round($m.Sum / 1GB, 2) }
+    }
+    [pscustomobject]@{ Time = (Get-Date -Format 'yyyy-MM-dd HH:mm'); Folders = @($list) } | ConvertTo-Json -Depth 4 | Set-Content $Inventory
+}
+
+function Get-InstalledPrograms {
+    @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                       'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                       'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName })
 }
 
 # ---- Brad's checks and fixes (requests/<id>.ps1 in the repo, signed) ----
@@ -229,13 +264,82 @@ function Get-Report {
         }
         Section 'Programs installed in the last 30 days' {
             $cut = (Get-Date).AddDays(-30).ToString('yyyyMMdd')
-            $apps = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-                                       'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-                                       'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-                      Where-Object { $_.DisplayName })
+            $apps = Get-InstalledPrograms
             $new = @($apps | Where-Object { "$($_.InstallDate)" -match '^\d{8}$' -and $_.InstallDate -ge $cut } | Sort-Object InstallDate -Descending)
             if ($new) { $new | ForEach-Object { "$($_.InstallDate): $($_.DisplayName)" } } else { 'None' }
             "($($apps.Count) programs installed in total)"
+        }
+        Section 'Programs worth a look' {
+            $apps = Get-InstalledPrograms | Select-Object -ExpandProperty DisplayName -Unique
+            # Common adware, fake optimizers and browser hijackers.
+            $junk = 'OneLaunch|Wave Browser|Shift Browser|Web ?Companion|Driver Booster|Driver Easy|DriverPack|Driver Support|Advanced SystemCare|' +
+                    'Reimage|Restoro|Fortect|Segurazo|ByteFence|PC App Store|Search Protect|PC Optimizer|SlimCleaner|Mobogenie|' +
+                    'WebAdvisor|Avast Secure Browser|AVG Secure Browser|CCleaner|PC Cleaner|PC Accelerate|Total ?AV|Bonjour Search'
+            # Scammers ask people to install these to "fix" the PC.
+            $remote = 'AnyDesk|TeamViewer|UltraViewer|ScreenConnect|ConnectWise|LogMeIn|GoTo ?Assist|Supremo|RustDesk|Splashtop|' +
+                      'Zoho Assist|AeroAdmin|Ammyy|RemotePC|Chrome Remote Desktop|Quick ?Support'
+            $found = @($apps | Where-Object { $_ -match $junk })
+            "Possible junk: $(if ($found) { $found -join ', ' } else { 'none' })"
+            $found = @($apps | Where-Object { $_ -match $remote })
+            "Remote access programs (only Brad's AnyDesk is expected): $(if ($found) { $found -join ', ' } else { 'none' })"
+        }
+        Section 'Email, browsers and Office' {
+            $assoc = 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations'
+            # The registry stores codes like "AppXbx2ce..."; their Application key has the readable name.
+            foreach ($kind in @(@('https', 'Default browser'), @('mailto', 'Default email app (mailto links)'))) {
+                $progId = (Get-ItemProperty "$assoc\$($kind[0])\UserChoice" -ErrorAction SilentlyContinue).ProgId
+                $app = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$progId\Application" -ErrorAction SilentlyContinue).ApplicationName
+                "$($kind[1]): $(if ($app -and $app -notmatch '^@') { "$app ($progId)" } else { $progId })"
+            }
+            foreach ($exe in 'msedge.exe', 'chrome.exe', 'firefox.exe', 'brave.exe', 'opera.exe', 'outlook.exe', 'winword.exe', 'excel.exe') {
+                $path = foreach ($hive in 'HKLM', 'HKCU') { (Get-ItemProperty "$($hive):\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$exe" -ErrorAction SilentlyContinue).'(default)' }
+                $path = @($path | Where-Object { $_ })[0]
+                if ($path -and (Test-Path $path.Trim('"'))) {
+                    $v = (Get-Item $path.Trim('"')).VersionInfo
+                    "$(if ($v.FileDescription) { $v.FileDescription } else { $exe }): version $($v.ProductVersion)$(if ($exe -eq 'outlook.exe') { ' (classic Outlook)' })"
+                }
+            }
+            $newOutlook = Get-AppxPackage Microsoft.OutlookForWindows -ErrorAction SilentlyContinue
+            "New Outlook app: $(if ($newOutlook) { "installed ($($newOutlook.Version))" } else { 'not installed' })"
+            if (Get-AppxPackage microsoft.windowscommunicationsapps -ErrorAction SilentlyContinue) { 'Old Windows Mail app: installed (retired by Microsoft)' }
+        }
+        Section 'Where files are saved' {
+            $od = @(Get-ChildItem 'HKCU:\Software\Microsoft\OneDrive\Accounts' -ErrorAction SilentlyContinue |
+                    Where-Object { (Get-ItemProperty $_.PSPath).UserEmail } | ForEach-Object { $_.PSChildName -replace '\d+$', '' })
+            "OneDrive: $(if ($od) { "signed in ($($od -join ', '))" } else { 'not signed in' }), $(if (Get-Process OneDrive -ErrorAction SilentlyContinue) { 'running' } else { 'not running' })"
+            $user = Get-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue
+            if ($user) { "Windows sign-in: $(if ("$($user.PrincipalSource)" -eq 'MicrosoftAccount') { 'Microsoft account' } else { 'local account (no Microsoft account)' })" }
+            if (-not (Test-Path $Inventory)) { Save-Inventory }
+            $inv = Get-Content $Inventory -Raw | ConvertFrom-Json
+            foreach ($f in (Get-UserFolders).GetEnumerator()) {
+                $where = if ($f.Value -match '\\OneDrive') { 'OneDrive (copied to the cloud)' } elseif ($f.Value -match '^\\\\') { 'network drive' } else { 'this PC only' }
+                $c = $inv.Folders | Where-Object Name -eq $f.Key
+                "$($f.Key): $where, $($f.Value)$(if ($c) { ", $($c.Files) files, $($c.GB) GB" })"
+            }
+            "(file counts from $($inv.Time))"
+            $bin = (New-Object -ComObject Shell.Application).NameSpace(10).Items()
+            "Recycle Bin: $($bin.Count) items"
+        }
+        Section 'Files saved in the last 7 days (newest first)' {
+            $cut = (Get-Date).AddDays(-7)
+            $folders = Get-UserFolders
+            $recent = foreach ($k in 'Desktop', 'Documents', 'Downloads', 'Pictures') {
+                $root = $folders[$k]
+                Get-ChildItem $root -Recurse -Depth 3 -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -gt $cut -and $_.Name -notlike '~$*' -and $_.Name -ne 'desktop.ini' } |
+                    ForEach-Object { [pscustomobject]@{ When = $_.LastWriteTime; Name = "$k$($_.FullName.Substring($root.Length))" } }
+            }
+            $recent = @($recent | Sort-Object When -Descending)
+            if ($recent) { $recent | Select-Object -First 25 | ForEach-Object { "  {0:MM-dd HH:mm} {1}" -f $_.When, $_.Name } } else { 'None' }
+            if ($recent.Count -gt 25) { "  (and $($recent.Count - 25) more)" }
+        }
+        Section 'Screen' {
+            Get-CimInstance Win32_VideoController | Where-Object CurrentHorizontalResolution |
+                ForEach-Object { "Display: $($_.CurrentHorizontalResolution) x $($_.CurrentVerticalResolution) ($($_.Name))" }
+            $dpi = (Get-ItemProperty 'HKCU:\Control Panel\Desktop\WindowMetrics' -ErrorAction SilentlyContinue).AppliedDPI
+            if ($dpi) { "Scaling: $([math]::Round($dpi / 96 * 100))%" }
+            $text = (Get-ItemProperty 'HKCU:\Software\Microsoft\Accessibility' -ErrorAction SilentlyContinue).TextScaleFactor
+            "Text size: $(if ($text) { "$text%" } else { '100% (normal)' })"
         }
         Section 'Security' {
             $av = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue
@@ -244,8 +348,12 @@ function Get-Report {
             if ($d) {
                 "Defender real-time protection: $($d.RealTimeProtectionEnabled)"
                 "Defender virus definitions age: $($d.AntivirusSignatureAge) days, last quick scan: $($d.QuickScanAge) days ago"
-                $threats = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { $_.InitialDetectionTime -gt $since })
-                "Threats found in last 7 days: $($threats.Count)"
+                $threats = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { $_.InitialDetectionTime -gt (Get-Date).AddDays(-30) })
+                "Threats found in last 30 days: $($threats.Count)"
+                if ($threats) {
+                    $names = @{}; Get-MpThreat -ErrorAction SilentlyContinue | ForEach-Object { $names[$_.ThreatID] = $_.ThreatName }
+                    $threats | ForEach-Object { "  {0:yyyy-MM-dd}: {1}" -f $_.InitialDetectionTime, $names[$_.ThreatID] }
+                }
             }
         }
         Section 'Windows Update' {
@@ -286,12 +394,21 @@ function Get-Report {
             }
             $pe = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-PrintService/Admin'; StartTime = $since } -MaxEvents 50 -ErrorAction SilentlyContinue)
             "Printing errors in last 7 days: $($pe.Count)"
-            $pe | Select-Object -First 3 | ForEach-Object { "  {0:yyyy-MM-dd HH:mm}: {1}" -f $_.TimeCreated, (($_.Message -replace '\s+', ' ').Substring(0, [math]::Min(140, $_.Message.Length))) }
+            $pe | Select-Object -First 3 | ForEach-Object {
+                $msg = ($_.Message -replace '\s+', ' ').Trim()
+                "  {0:yyyy-MM-dd HH:mm}: {1}" -f $_.TimeCreated, $msg.Substring(0, [math]::Min(140, $msg.Length))
+            }
         }
         Section 'Internet' {
             "Internet reachable: $(Test-Connection 1.1.1.1 -Count 2 -Quiet)"
             "Websites resolve: $([bool](Resolve-DnsName google.com -QuickTimeout -ErrorAction SilentlyContinue))"
             Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { "Connected by: $($_.InterfaceDescription), $($_.LinkSpeed)" }
+            # Router reachable but internet not: the provider. Router not reachable: Wi-Fi or the router itself.
+            $ip = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1
+            if ($ip) {
+                "Router $($ip.IPv4DefaultGateway.NextHop) reachable: $(Test-Connection $ip.IPv4DefaultGateway.NextHop -Count 2 -Quiet)"
+                "DNS servers: $(($ip.DNSServer | Where-Object AddressFamily -eq 2).ServerAddresses -join ', ')"
+            }
             $wifi = netsh wlan show interfaces | Select-String '^\s*(State|Signal|Radio type|Band|Channel|Receive rate \(Mbps\))\s*:'
             if ($wifi) { "Wi-Fi: $(($wifi | ForEach-Object { ($_.Line.Trim() -replace '\s*:\s*', ' ') }) -join ', ')" }
         }
@@ -318,6 +435,7 @@ if ($Setup) {
 if ($Record) {
     try { Install-Parts } catch { }
     try { Save-Sample } catch { }
+    try { if (-not (Test-Path $Inventory) -or (Get-Item $Inventory).LastWriteTime -lt (Get-Date).AddHours(-20)) { Save-Inventory } } catch { }
     try { $req = Get-Request; if ($req -and $req.Kind -eq 'check') { Invoke-Request $req } } catch { }
     # Once an hour, take a signed update without waiting for a click.
     if ((Get-Date).Minute -lt 5) { try { & (Join-Path $Dir 'Launcher.ps1') -UpdateOnly } catch { } }
@@ -377,7 +495,7 @@ $form.Controls.Add($versionLabel)
 $script:report = $null
 function Get-CachedReport {
     if (-not $script:report) {
-        $label.Text = "Checking your computer...`r`nThis takes about 20 seconds."
+        $label.Text = "Checking your computer...`r`nThis can take up to a minute."
         $form.Cursor = 'WaitCursor'
         $form.Refresh()
         $script:report = Get-Report
@@ -439,4 +557,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: FD0ylEf5ELwzlmYBedMU9ZyAHFzMSkoKB19aUobep2aAdTF1flozkHx2+Zo0DKTx1xXFwsPUeDMW4y/NCLsrIfEfhFPVgxezgOgx6w9JHhcC4pFbamdyMzvDMqiGS+EdQRDDLpHrPJ2bjhkFGcvmaxYrJvbsMGT3clMaSb7xNPrqlzfYFM6Ff7ML66ly1STjPyJ6yBJEEqhR9kjCzpFVBC1HzT3d5+v9MyFk0GUH3D1YTloEqAMdHOeJWtd18vizguhPLqEUTWbGdSKVSC74/+Z2YnkV2zfb0QXLs8TLiS3Szlwb6WWGVd39vzWsabIwDCUdVuBXZ/qSMaSv0xHF+NlVTzgqc7imwzAhDn78eIeSS3a3WpxdVm3+QPK9hFW9t4RPJKDnib/vHTownGy4mIORRbO7lCC4BPPirRAI8xMWvEzkFliwcSkbkanZIS8Wos1iyMW2OjiL4syTPzbyAzqB3WoDdR179J6RzEJpN8DAtYZFTvXI6wa3nT8WBVA+
+# signature: n1jaqm5Yrxu0QOY05Ws7KNJfhSjkNI8y1bSMxh1nA/+FKDsUO29QYVX4P4mLrkl8CBc7j5HrZCSVFzxNgi/O7+pRHDwkM/oL9DS6h9KRvokgcyMJ6X91FMtA0MV+U8IhLtjLUBJoSOQx2NPyOshFyfDNgM8JJotPcwgZHyWR6x8m8hqj938mWoGSVYGENxIpt9zIb84Yh5+I+340jLYtf94ylfkGy+LeYG6gqKlikCZ3Lm2Ne4giDyvoHOu0UA0qUwAG8Dd9BIxRRmfyMM0BzA+8I5TsxG8mSqzgIEGaMwMznF14zdsJvudfcfwXw7NtPxuOasO59Jbdg0nGUyQVgzcdJN5NRmv1vTfpfF2WKS5luSu6cY/qUDLfJbPW6V6BkVr6Ry3mRl/HSGDr2Lcm+ZwNz1jZWDXbwSfTs44vQSh33yQn5RnhuZo8FnmIVu4njSuhnmj1X1JUCztjxByInizTaZqOGeEMAcxsPI6hJJ10X9SyZ8Lc4/bMnm9LuEN5
