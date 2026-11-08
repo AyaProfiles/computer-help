@@ -1,19 +1,16 @@
 # computer-help-main
 # Computer Help: a small window with big buttons for Brad's in-laws.
-# It checks the PC (read-only, nothing is changed), then either sends the report
-# straight to Brad or hands it to an AI chat in the browser.
+# It checks the PC (read-only, nothing is changed) and sends the report
+# straight to Brad.
 # Launcher.ps1 replaces this file with the GitHub copy on every start, so bump
 # $Version with every change. Personal settings live in config.json, never here.
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly)
 
-$Version = '2026.11.07.2'
+$Version = '2026.11.08.1'
 
 $cfgPath = Join-Path $PSScriptRoot 'config.json'
 $cfg = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
-$AiName    = if ($cfg.aiName) { $cfg.aiName } else { 'Grok' }
-$AiUrl     = if ($cfg.aiUrl)  { $cfg.aiUrl }  else { 'https://grok.com' }
-$AboutThem = "$($cfg.aboutThem)"
 
 # ---- The check (read-only) ----
 function Section($title, [scriptblock]$body) {
@@ -107,29 +104,6 @@ function Get-Report {
     $text
 }
 
-function Get-AiText($report) {
-    $about = if ($AboutThem.Trim()) { "About them: $($AboutThem.Trim())`r`n`r`n" } else { '' }
-@"
-You are helping an older, non-technical person with their Windows 11 computer. Their son-in-law Brad set this up. Below is an automatic, read-only report from their computer (personal names removed).
-
-Rules:
-- Use plain, friendly words. No jargon. Keep replies short.
-- Give ONE step at a time, then wait for them to say it's done or tell you what they see.
-- Say exactly where to click and what it looks like on the screen.
-- Only suggest safe steps built into Windows. Never suggest downloading "cleaner", "booster" or driver-updater apps, registry edits, or commands that delete things.
-- If someone called them, or a pop-up says the computer has a virus and to call a number, tell them it is a scam: do not call, do not let anyone connect to the computer, close the browser or restart.
-- If the problem looks serious (failing drive, virus, lost files, broken hardware, passwords or money involved) or you are not sure, tell them: "Please click 'Send report to Brad' in the Computer Help window."
-
-First say in one or two sentences what stands out in the report, then help with their problem.
-
-$about--- COMPUTER REPORT ---
-$report
---- END OF REPORT ---
-
-My problem:
-"@
-}
-
 if ($ReportOnly) { Get-Report; return }
 
 # ---- The window ----
@@ -138,7 +112,7 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Computer Help'
-$form.ClientSize = New-Object System.Drawing.Size(560, 560)
+$form.ClientSize = New-Object System.Drawing.Size(560, 470)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -168,11 +142,10 @@ function New-BigButton($text, $top, $color) {
     $b
 }
 $bradButton  = New-BigButton 'Send to Brad'              255 ([System.Drawing.Color]::FromArgb(30, 140, 80))
-$aiButton    = New-BigButton "Ask $AiName myself"         350 ([System.Drawing.Color]::FromArgb(30, 100, 200))
 $closeButton = New-BigButton 'Close'                      0   ([System.Drawing.Color]::Gray)
-$closeButton.SetBounds(180, 460, 200, 55)
+$closeButton.SetBounds(180, 360, 200, 55)
 $versionLabel = New-Object System.Windows.Forms.Label
-$versionLabel.SetBounds(400, 535, 155, 20)
+$versionLabel.SetBounds(400, 445, 155, 20)
 $versionLabel.Font = New-Object System.Drawing.Font('Segoe UI', 8)
 $versionLabel.ForeColor = [System.Drawing.Color]::Gray
 $versionLabel.Text = "version $Version"
@@ -189,12 +162,6 @@ function Get-CachedReport {
     }
     $script:report
 }
-
-$aiButton.Add_Click({
-    Set-Clipboard -Value (Get-AiText (Get-CachedReport))
-    Start-Process $AiUrl
-    $label.Text = "$AiName is opening in your web browser.`r`nClick in the box where you type, press Ctrl + V, then type what's wrong and press Enter."
-})
 
 $bradButton.Add_Click({
     $report = Get-CachedReport

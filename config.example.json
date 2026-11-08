@@ -2,8 +2,5 @@
   "who": "Mom and Dad",
   "uploadUrl": "https://script.google.com/macros/s/PASTE-DEPLOYMENT-ID/exec",
   "key": "PASTE-THE-SAME-KEY-AS-IN-Code.gs",
-  "bradEmail": "you@example.com",
-  "aiName": "Grok",
-  "aiUrl": "https://grok.com",
-  "aboutThem": ""
+  "bradEmail": "you@example.com"
 }
