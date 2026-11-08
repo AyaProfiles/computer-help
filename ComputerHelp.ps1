@@ -8,7 +8,7 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
 
-$Version   = '2026.11.08.2'
+$Version   = '2026.11.08.3'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
@@ -73,9 +73,14 @@ function Install-Parts {
     if ($old -ne $text) { [IO.File]::WriteAllText($launcher, $text) }
 
     if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
-        # conhost --headless keeps the console window from flashing every 5 minutes.
-        $action = New-ScheduledTaskAction -Execute 'conhost.exe' `
-            -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$Dir\ComputerHelp.ps1`" -Record"
+        # conhost --headless keeps the console window from flashing every few minutes.
+        # Windows older than 10 1809 lacks it and gets a brief flash instead.
+        $run = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Dir\ComputerHelp.ps1`" -Record"
+        $action = if ([int](Get-CimInstance Win32_OperatingSystem).BuildNumber -ge 17763) {
+            New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless $run"
+        } else {
+            New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($run -replace '^powershell\.exe ', '')
+        }
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $RecordMinutes)
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
@@ -189,6 +194,7 @@ function Get-Report {
             $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
             $up  = (Get-Date) - $os.LastBootUpTime
             "Windows: $($os.Caption) (build $($os.BuildNumber))"
+            if ([int]$os.BuildNumber -lt 22000) { 'NOTE: Windows 10 or older. Microsoft stopped security updates for Windows 10 in October 2025.' }
             "Model: $($cs.Manufacturer) $($cs.Model)"
             $load = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
             "Processor: $($cpu.Name.Trim()), busy right now: $load%"
@@ -433,4 +439,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: RRJKh9hZBhBu6OLd1QO0BYY9YStFI0v83uhuPIuABAE5XwmpgrO99PuKA/XjbQhVwBiYrVFUIquhEnxbu6ujHPOBJTY/RCAqySaeF5cChn+e9QL8xGWgImLyUOCUDUJ67WgBE1OH2790sCZsgn3KkG9xrsUwsfC7ctTjCgz6P8o9F/2BJbDqy5VBVwSNt4x+WOnoNLda57N/gsi8IOhw7364WIxknF0gWaAdr+7UJwfMCK1FNxeGAONM7dmezZCff8hco4Q6Hpkk25XcklFWrj0zFDkoroMm7C2DLa9tcxnma5HJkOoUI+72WfXNVtCuB7dSvlwWsFQuAqjIMBLaZQv0Uk8nwiPJ8fL0M7mAesgvNrP1Qj4epKYAuXhOLYzsWtuTZ3hnlzfSwvte7oTDVELK+Xy1CVox+vRRVLdUAgS6aDAg+NKkrnD5EnpX9cZe/Kkz4DiUa2O3oScM1ZKpqJC4p/y7qCdAub4Hes8sKl8KTjqGqe00YicstW53dedp
+# signature: FD0ylEf5ELwzlmYBedMU9ZyAHFzMSkoKB19aUobep2aAdTF1flozkHx2+Zo0DKTx1xXFwsPUeDMW4y/NCLsrIfEfhFPVgxezgOgx6w9JHhcC4pFbamdyMzvDMqiGS+EdQRDDLpHrPJ2bjhkFGcvmaxYrJvbsMGT3clMaSb7xNPrqlzfYFM6Ff7ML66ly1STjPyJ6yBJEEqhR9kjCzpFVBC1HzT3d5+v9MyFk0GUH3D1YTloEqAMdHOeJWtd18vizguhPLqEUTWbGdSKVSC74/+Z2YnkV2zfb0QXLs8TLiS3Szlwb6WWGVd39vzWsabIwDCUdVuBXZ/qSMaSv0xHF+NlVTzgqc7imwzAhDn78eIeSS3a3WpxdVm3+QPK9hFW9t4RPJKDnib/vHTownGy4mIORRbO7lCC4BPPirRAI8xMWvEzkFliwcSkbkanZIS8Wos1iyMW2OjiL4syTPzbyAzqB3WoDdR179J6RzEJpN8DAtYZFTvXI6wa3nT8WBVA+
