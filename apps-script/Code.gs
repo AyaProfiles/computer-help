@@ -13,6 +13,8 @@ function doPost(e) {
   const text = 'From: ' + data.who + '\nTool version: ' + data.version +
                '\nWhat they wrote: ' + (data.note || '(nothing)') + '\n\n' + data.report;
   getFolder().createFile(name, text, MimeType.PLAIN_TEXT);
+  // The 14-day history (one line every 5 minutes) goes next to the report.
+  if (data.history) getFolder().createFile(name.replace(/\.txt$/, ' history.csv'), data.history, MimeType.CSV);
 
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
                     'Computer Help: ' + data.who + (data.note ? ' - ' + data.note.slice(0, 60) : ''),

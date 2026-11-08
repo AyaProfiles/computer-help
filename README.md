@@ -1,0 +1,50 @@
+# Computer Help
+
+A one-button support tool for family and friends' Windows PCs. They press **Send to Brad** and a read-only report of their PC goes to Brad's Google Drive and email.
+
+## How it works
+
+- **Desktop icon** runs `Launcher.ps1`. The launcher fetches the newest `ComputerHelp.ps1` from this repo, keeps it only if it carries Brad's signature, then runs it.
+- **Recorder:** a hidden task runs `ComputerHelp.ps1 -Record` every 5 minutes. It logs CPU, memory, disk, the busiest programs and the internet state to `history.csv`, keeping 14 days.
+- **Brad's checks and fixes:** `requests/<id>.ps1` is a signed script for one PC.
+  - A `check` runs by itself on the next recorder run.
+  - A `fix` shows an orange button and waits for a click.
+  - Each one runs once per request id, and its output is sent to Brad.
+- **Reports** go to a Google Apps Script web app (`apps-script/Code.gs`) in Brad's account, which saves them in the Drive folder "Computer Help reports" and emails Brad.
+
+## Files on each PC
+
+All files live in `%LOCALAPPDATA%\ComputerHelp`:
+
+- `ComputerHelp.ps1`
+- `Launcher.ps1` (written by `ComputerHelp.ps1`)
+- `config.json` (local only, never in this repo)
+- `history.csv`
+- `requests-done.txt`
+
+## Changing anything
+
+1. Edit `ComputerHelp.ps1` and bump `$Version`.
+2. Run `powershell -ExecutionPolicy Bypass -File tools\Sign.ps1 ComputerHelp.ps1`.
+3. Commit and push.
+
+Unsigned or tampered files are ignored by every PC, so a forgotten signature fails safe.
+
+The private key is in `C:\claude-pc\computer-help-keys` on Brad's PC, never in git. Without it no PC accepts updates; the only fix would be a reinstall.
+
+## A request
+
+```powershell
+# request-id: 2026-11-10-printer-1
+# kind: check
+# title: Look at why the printer won't print
+Get-Printer | Format-List *
+```
+
+Save it as `requests/<id>.ps1`, sign it with `tools\Sign.ps1`, then commit and push. A new id means it runs again.
+
+## Adding a PC
+
+1. Make `config-<id>.json` from `config.example.json`, using the same upload URL and key.
+2. Zip it as `config.json` together with `Install.cmd` and `ComputerHelp.ps1`.
+3. Run `Install.cmd` on their PC.

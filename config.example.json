@@ -1,6 +1,8 @@
 {
+  "id": "short-name-for-this-pc",
   "who": "Mom and Dad",
   "uploadUrl": "https://script.google.com/macros/s/PASTE-DEPLOYMENT-ID/exec",
   "key": "PASTE-THE-SAME-KEY-AS-IN-Code.gs",
-  "bradEmail": "you@example.com"
+  "bradEmail": "you@example.com",
+  "recordMinutes": 5
 }
