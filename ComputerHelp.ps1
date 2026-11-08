@@ -7,7 +7,7 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly)
 
-$Version = '2026.11.07.1'
+$Version = '2026.11.07.2'
 
 $cfgPath = Join-Path $PSScriptRoot 'config.json'
 $cfg = if (Test-Path $cfgPath) { Get-Content $cfgPath -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
@@ -171,12 +171,12 @@ $bradButton  = New-BigButton 'Send to Brad'              255 ([System.Drawing.Co
 $aiButton    = New-BigButton "Ask $AiName myself"         350 ([System.Drawing.Color]::FromArgb(30, 100, 200))
 $closeButton = New-BigButton 'Close'                      0   ([System.Drawing.Color]::Gray)
 $closeButton.SetBounds(180, 460, 200, 55)
-$version = New-Object System.Windows.Forms.Label
-$version.SetBounds(400, 535, 155, 20)
-$version.Font = New-Object System.Drawing.Font('Segoe UI', 8)
-$version.ForeColor = [System.Drawing.Color]::Gray
-$version.Text = "version $Version"
-$form.Controls.Add($version)
+$versionLabel = New-Object System.Windows.Forms.Label
+$versionLabel.SetBounds(400, 535, 155, 20)
+$versionLabel.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+$versionLabel.ForeColor = [System.Drawing.Color]::Gray
+$versionLabel.Text = "version $Version"
+$form.Controls.Add($versionLabel)
 
 $script:report = $null
 function Get-CachedReport {
