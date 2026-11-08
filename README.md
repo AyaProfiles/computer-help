@@ -45,6 +45,19 @@ Save it as `requests/<id>.ps1`, sign it with `tools\Sign.ps1`, then commit and p
 
 ## Adding a PC
 
-1. Make `config-<id>.json` from `config.example.json`, using the same upload URL and key.
-2. Zip it as `config.json` together with `Install.cmd` and `ComputerHelp.ps1`.
-3. Run `Install.cmd` on their PC.
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\New-Install.ps1 -Id <id> -Who "<Name>" [-RecordMinutes 10]
+```
+
+This builds `installers\<id>.zip`, using the shared upload URL, key and email from `C:\claude-pc\computer-help-keys\shared.json`.
+
+- The person's config is saved as `config-<id>.json`. Configs and zips are never in git.
+- Later rebuilds need only `-Id`.
+- Rebuild right before installing, so the zip has the newest version.
+
+On their PC: Extract All, double-click `Install.cmd` (not as admin), then press Send to Brad once. Delete the zip afterwards, because it contains the upload key.
+
+People so far:
+
+- `janas-parents` (installed 2026-11-07)
+- `sheila`: config ready, not installed. 10-minute recorder because her PC is old.
