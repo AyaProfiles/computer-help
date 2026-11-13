@@ -10,6 +10,7 @@ A one-button support tool for family and friends' Windows PCs. They press **Send
   - A `check` runs by itself on the next recorder run.
   - A `fix` shows an orange button and waits for a click.
   - Each one runs once per request id, and its output is sent to Brad.
+  - Brad prefers fixes to run silently too (a popup looks like a virus to them), so most fixes go out as `check`. Anything they would notice (closing a program, a restart) waits until Brad has called them.
 - **Reports** go to a Google Apps Script web app (`apps-script/Code.gs`) in Brad's account, which saves them in the Drive folder "Computer Help reports" and emails Brad.
 
 ## Files on each PC
