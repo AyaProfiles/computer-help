@@ -8,7 +8,7 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
 
-$Version   = '2026.11.14.1'
+$Version   = '2026.11.14.2'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
@@ -149,9 +149,11 @@ function Save-Sample {
     if (-not (Test-Path $History)) { Set-Content $History $header }
     elseif ((Get-Content $History -TotalCount 1) -ne $header) { $all = @(Get-Content $History); $all[0] = $header; Set-Content $History $all }
     Add-Content $History $line
-    if ((Get-Item $History).Length -gt 400KB) {
-        $all = Get-Content $History
-        Set-Content $History (@($all[0]) + $all[-4032..-1])
+    # 14 days = 4032 samples. The size check only saves reading small files; the row count decides.
+    # The slack (4300) keeps it from rewriting the file on every sample once it is full.
+    if ((Get-Item $History).Length -gt 300KB) {
+        $all = @(Get-Content $History)
+        if ($all.Count -gt 4300) { Set-Content $History (@($all[0]) + $all[-4032..-1]) }
     }
 }
 
@@ -305,7 +307,7 @@ function Save-Changes {
         if ($lines) {
             if (-not (Test-Path $Changes)) { Set-Content $Changes 'Time,What,Detail' }
             Add-Content $Changes $lines
-            if ((Get-Item $Changes).Length -gt 100KB) { $all = Get-Content $Changes; Set-Content $Changes (@($all[0]) + $all[-800..-1]) }
+            if ((Get-Item $Changes).Length -gt 50KB) { $all = @(Get-Content $Changes); if ($all.Count -gt 1000) { Set-Content $Changes (@($all[0]) + $all[-800..-1]) } }
         }
     }
     $now | ConvertTo-Json | Set-Content $Snapshot
@@ -743,4 +745,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: Ghr4iA8CcAuIvok1YXDq7P5d86CEobRqX1GaEU5HK6WLormvEyBDxmOnW4wsSQJfhIGnFVD1T++jxAKPMwIw7x88F8aHsgbUPCuOFNkNe28BhpYNk73VirC3QJH2ww89HlhOjdje0YpPx67jwzLdOMA//Yjo/eLZp9Sh72p0b2wb2PnQOCpSrMFCqShDxvnIr1RBToiDyNs+C23/9qg6sxZL0SAt1a7iqRmnBAz0Kcb3m9Hww9CY1cV3qNpBqo2Ibcyp3HE0GR23+0G7xTk4J6mbIIBzSsF//VF2/E0Db/ZVv+ShtbTpvWpk4loNPqg79bw4+erRvDtXgYYNqyA/dcVffRYUg203zMaI405+Ldbv1TgBM2+hmsJ6CEJa0oWrV9x5/PqSJu/WaC1Yrt/ZQEcmFKhxpsMk//ix4HsG4vnrYpQKPKDgp6hj6iFJq2LUyMFqObHCe3Q9J3l1rZYFoFB1ddQxHSD+ubmLZTPzFG0Nml2sCpRZNyTK6towsTMy
+# signature: s6rw+j98X6MPqqbJuQw2+DkHFjr2T8N+y3J6/xORPqhpBNSD192xqwVCcsv8IU7kqfYYO6Vo/7fFyT5RH8Nt7hzSbCh+wQ62AXO6gVKW5sMSXxKEQoCj5kzb0FXQtYmru5NilTLnpQXI7Dysu/xWi8vg0AK+DEkjjCKW0J83w4hV5LbtqcZxkAHQFkuyCrzhkMyteZqxzqSqSIw8Ms1EMpkZRmwyzayuaypug8rptmkARaSJfdK9nZFTvi0Qa70W/ZDyesCrDKeG9pR/CKk7bEu3lYHjAgxhk9Sfp7RfITqp1B3GAby7o9LJS5mccXuN5TRRuh7YJSyzUMzCDa9iVpzvcqKksJVlVDHfCghMuUfqbLCIxWg5oygJfNETnL8zyYQon0SHExwOeJeftNMc2gx7Iqia/W5HLV2HOU/OhUa8wWJfraMLv0XJhvvYik2Nky9QK8PRdp9P6zKQl+mFgjr+kj2zya4kj4kDy3GYWh6ZyzLZ44uiM7o/f1LxnnpY
