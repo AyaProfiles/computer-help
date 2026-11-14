@@ -8,7 +8,7 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup, [switch]$DailyReport)
 
-$Version   = '2026.11.14.3'
+$Version   = '2026.11.14.4'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
@@ -113,9 +113,11 @@ function Hide-Names($text) {
     $text
 }
 
-function Send-ToBrad($note, $report, $history) {
+# -Quiet: save to Drive only, no email (automatic reports). The button and fixes they click still email.
+function Send-ToBrad($note, $report, $history, [switch]$Quiet) {
     $data = @{ key = $cfg.key; who = $cfg.who; id = $PcId; version = $Version; note = $note; report = $report }
     if ($history) { $data.history = $history }
+    if ($Quiet) { $data.quiet = $true }
     $answer = Invoke-RestMethod -Uri $cfg.uploadUrl -Method Post -TimeoutSec 60 `
         -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes(($data | ConvertTo-Json)))
     if ("$answer".Trim() -ne 'ok') { throw "server answered: $answer" }
@@ -343,7 +345,7 @@ function Invoke-Request($req) {
     $out = Receive-Job $job 2>&1 | Out-String
     if (-not $finished) { Stop-Job $job; $out += "`r`n(stopped after 10 minutes)" }
     Remove-Job $job -Force
-    Send-ToBrad "Result of $($req.Kind) $($req.Id): $($req.Title)" (Hide-Names $out)
+    Send-ToBrad "Result of $($req.Kind) $($req.Id): $($req.Title)" (Hide-Names $out) -Quiet:($req.Kind -eq 'check')
 }
 
 # ---- The check (read-only) ----
@@ -623,7 +625,7 @@ function Send-DailyLog {
     if ((Test-Path $tried) -and (Get-Item $tried).LastWriteTime -gt (Get-Date).AddMinutes(-30)) { return }
     Set-Content $tried (Get-Date -Format s)
     $history = if (Test-Path $History) { Get-Content $History -Raw } else { $null }
-    Send-ToBrad "Daily log (automatic, until $($DailyUntil.ToString('yyyy-MM-dd')))" (Get-Report -Daily) $history
+    Send-ToBrad "Daily log (automatic, until $($DailyUntil.ToString('yyyy-MM-dd')))" (Get-Report -Daily) $history -Quiet
     Set-Content $sent (Get-Date -Format s)
 }
 
@@ -766,4 +768,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: fi1SYGK5xd0wb/+0zfK9iTdca8c+/3Xu1ArQJurL1WO+VldKN0FLLWy/YzgJ9JWTRZUfmVwsPGcBNf0+okD1KT4btcRDWUpLTImUI+mCRy+bnDqjtO/boYStCJGFGejz9mJM4vnofXLKBqMbmdJk3us/bEkODPYTFrWpt9Bg4pOk2pAHuOyPVXKkdixIeofBOmfjdbSBkBcgMfYRpDh/V3ic8kn5oLsi2UksQgi/tfT1oCrcUxpXOp7DtzKcuF21poQR8vWy7WEGOtxHntGvplC48goi19PgcaMroMqAA+LjVSAl7XRQxI4oxH7l7GKdSWolhB5IO+7l3yXtFiUT27jDWShDxcD4MRbujbSZzxo/+63SBDvhB2KeaPOTaA632RFECCFYHvfIjVW19WgmsB71c9ULTABRXPGSl0pyOGFeHOcR0lvu3StEfXIrqNjjHj0BSIOVG4JeSao/Nt/zfkkRBxtD9ILI8l4te6xwgYApD13P8NFEBmWPBff6W4p7
+# signature: GNXKvCAM20cywTDeX9Nfc6fOH6EIO2D3tYJw2MNvjKng2qcpv7/gVrUZEHqE+6NuhEvybnzjS3LZz3n7PZtD+A8+9xxcse3T6XmgXlMren4UvltWSrO7RyTiisGb8DTn1LvZdb3S9FE1FW3Ip/WVWPNF00D/TZfPuQ+JOPcXpVblwsLioLByN6MQ9cWXZUdttmxSv829UQGVnTKk8Dpraf1CTziJGft/p9xZDGdQZkfNfxD1Z7BDwTmTx7+Y+g7D6Zgot1fLnAMFTFUPMkKZwMlGPEk7iIj+ZPG6Vy3EM/XSrN7fk9d6lvieN1ECtYOjuPlpcEqxebyp4R/wL3a+yiAvUFqN1CXEJFg7zB/g+8TtutknekknTQBL4esLZzQZrzic0Uppi1FiCNz605Tbe7RZ9sEb+ka86bsuv7xVON49Hh61LuI0hZ2E6/JNdCKN9NXBADU1XNd+3pLg7GLxBuuqOvRBatdxsVBc/TwSJtrVPvqnq9bO8nHIdBGcTxer

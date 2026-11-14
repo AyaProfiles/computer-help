@@ -16,7 +16,8 @@ function doPost(e) {
   // The 14-day history (one line every 5 minutes) goes next to the report.
   if (data.history) getFolder().createFile(name.replace(/\.txt$/, ' history.csv'), data.history, MimeType.CSV);
 
-  MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
+  // Automatic reports (daily log, silent checks) say quiet: they are saved to Drive but not emailed.
+  if (!data.quiet) MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
                     'Computer Help: ' + data.who + (data.note ? ' - ' + data.note.slice(0, 60) : ''),
                     text + '\n\nSaved in Drive: ' + FOLDER_NAME + '/' + name);
   trashOldReports();
