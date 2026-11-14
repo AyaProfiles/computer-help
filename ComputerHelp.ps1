@@ -8,7 +8,7 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
 
-$Version   = '2026.11.08.4'
+$Version   = '2026.11.13.1'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
@@ -86,7 +86,18 @@ function Install-Parts {
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
+        $logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigger, $logon) -Settings $settings -Principal $principal | Out-Null
+    } else {
+        # Tasks made by older versions only repeat every few minutes: add a log-on start so a PC
+        # that was off picks up Brad's requests right after sign-in.
+        try {
+            $task = Get-ScheduledTask -TaskName $TaskName
+            if (-not ($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })) {
+                $logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+                Set-ScheduledTask -TaskName $TaskName -Trigger (@($task.Triggers) + $logon) | Out-Null
+            }
+        } catch { }
     }
 }
 
@@ -557,4 +568,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: n1jaqm5Yrxu0QOY05Ws7KNJfhSjkNI8y1bSMxh1nA/+FKDsUO29QYVX4P4mLrkl8CBc7j5HrZCSVFzxNgi/O7+pRHDwkM/oL9DS6h9KRvokgcyMJ6X91FMtA0MV+U8IhLtjLUBJoSOQx2NPyOshFyfDNgM8JJotPcwgZHyWR6x8m8hqj938mWoGSVYGENxIpt9zIb84Yh5+I+340jLYtf94ylfkGy+LeYG6gqKlikCZ3Lm2Ne4giDyvoHOu0UA0qUwAG8Dd9BIxRRmfyMM0BzA+8I5TsxG8mSqzgIEGaMwMznF14zdsJvudfcfwXw7NtPxuOasO59Jbdg0nGUyQVgzcdJN5NRmv1vTfpfF2WKS5luSu6cY/qUDLfJbPW6V6BkVr6Ry3mRl/HSGDr2Lcm+ZwNz1jZWDXbwSfTs44vQSh33yQn5RnhuZo8FnmIVu4njSuhnmj1X1JUCztjxByInizTaZqOGeEMAcxsPI6hJJ10X9SyZ8Lc4/bMnm9LuEN5
+# signature: XqfvGAIu6j+uIwEpil3SkhMezIdIzVn9/fLySKtxjnKhxTpanaoAPn/Hg0YpIfRIle2rt10w0a90tXiwncZTzxL3usv5I4mFXQtpJEtNsNLec3Xe+LZy9u+51hl4qNtiPLATWFBpkguk32Q63uDNlEriSeRYFxlBOs3YZR7c9jTrdRxuGmWcKtMT9TRayMhLbA4iTh5KX2YYNQRWXnWMBkkpITwnAwKRW9hWW1e6BKTPTwa7KHtSBne1GltCCxQNsohGKrxndE8ht8SyvSSiNwQyQWeBH7Vy/aQ5cfesZltoZ9H90q3/YqtKItMZgtJX76fvK4FLTbgdwxVKhYQqnj6sSOobRs2b4r4lbR+xu3FN+UZsS279BLWbWUyhhHNQO9Y4PqBGyP9l6oI41maO9etby8q1lLYpCH36GP3v8Fd/moGiCx8soEXk5R9hxYKub0Ud08TQ2c5miOIFlFJj0FU8M4+tYtkahwTOuIqrieDuqzcnhSKVhbBNzPU/26j4
