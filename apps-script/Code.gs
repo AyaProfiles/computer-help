@@ -19,7 +19,24 @@ function doPost(e) {
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
                     'Computer Help: ' + data.who + (data.note ? ' - ' + data.note.slice(0, 60) : ''),
                     text + '\n\nSaved in Drive: ' + FOLDER_NAME + '/' + name);
+  trashOldReports();
   return ContentService.createTextOutput('ok');
+}
+
+// Moves report files older than KEEP_DAYS to the Drive trash (Drive empties its trash after 30 more days).
+// Runs at most once a day, whenever a report arrives. Only touches files named like the ones saved above.
+const KEEP_DAYS = 30;
+function trashOldReports() {
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (props.getProperty('lastCleanup') === today) return;
+  props.setProperty('lastCleanup', today);
+  const cutoff = Date.now() - KEEP_DAYS * 24 * 3600 * 1000;
+  const files = getFolder().getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    if (/^\d{4}-\d{2}-\d{2} \d{4} /.test(f.getName()) && f.getDateCreated().getTime() < cutoff) f.setTrashed(true);
+  }
 }
 
 function getFolder() {
