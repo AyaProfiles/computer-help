@@ -6,6 +6,7 @@ A one-button support tool for family and friends' Windows PCs. They press **Send
 
 - **Desktop icon** runs `Launcher.ps1`. The launcher fetches the newest `ComputerHelp.ps1` from this repo, keeps it only if it carries Brad's signature, then runs it.
 - **Recorder:** a hidden task runs `ComputerHelp.ps1 -Record` every 5 minutes. It logs CPU, memory, disk, the busiest programs and the internet state to `history.csv`, keeping 14 days.
+- **Daily log (trial until 2026-11-28):** about once a day (22 hours or more apart, retried after 30 minutes if the upload fails) the recorder sends a technical report plus the 14-day history, with no click. It leaves out the list of recently saved files and the printers. To extend or stop it, change `$DailyUntil`, bump `$Version` and sign.
 - **Brad's checks and fixes:** `requests/<id>.ps1` is a signed script for one PC.
   - A `check` runs by itself on the next recorder run.
   - A `fix` shows an orange button and waits for a click.

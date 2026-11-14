@@ -6,14 +6,17 @@
 # Updates and Brad's requests only run when signed with Brad's key (tools\Sign.ps1),
 # so bump $Version and re-sign with every change. Personal settings live in config.json.
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
-param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
+param([switch]$ReportOnly, [switch]$Record, [switch]$Setup, [switch]$DailyReport)
 
-$Version   = '2026.11.14.2'
+$Version   = '2026.11.14.3'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
 $History   = Join-Path $Dir 'history.csv'
 $DoneFile  = Join-Path $Dir 'requests-done.txt'
+# Brad's trial (2026-11-14): the recorder sends a technical report and the 14-day history about once a day
+# until this date, to find slowdowns. To extend it, change the date, bump $Version and sign.
+$DailyUntil = [datetime]'2026-11-28'
 $Snapshot  = Join-Path $Dir 'snapshot.json'
 $Changes   = Join-Path $Dir 'changes.csv'
 $Inventory = Join-Path $Dir 'folders.json'
@@ -345,11 +348,14 @@ function Invoke-Request($req) {
 
 # ---- The check (read-only) ----
 function Section($title, [scriptblock]$body) {
+    if ($script:SkipSections -contains $title) { return }
     $text = try { (& $body | Out-String).TrimEnd() } catch { "(could not check: $($_.Exception.Message))" }
     "== $title ==`r`n$text`r`n"
 }
 
-function Get-Report {
+function Get-Report([switch]$Daily) {
+    # The automatic daily report leaves out what they did (names of recently saved files) and the printers.
+    $script:SkipSections = if ($Daily) { @('Files saved in the last 7 days (newest first)', 'Printers') } else { @() }
     $since = (Get-Date).AddDays(-7)
     $parts = @(
         Section 'Computer' {
@@ -607,7 +613,21 @@ function Get-Report {
     Hide-Names ($parts -join "`r`n")
 }
 
-if ($ReportOnly) { Get-Report; return }
+# About once a day until $DailyUntil: the technical report plus the 14-day history, sent without a click.
+# Marker files hold the times (their LastWriteTime): a failed upload is retried after 30 minutes.
+function Send-DailyLog {
+    if ((Get-Date) -ge $DailyUntil) { return }
+    $sent  = Join-Path $Dir 'daily-sent.txt'
+    $tried = Join-Path $Dir 'daily-tried.txt'
+    if ((Test-Path $sent)  -and (Get-Item $sent).LastWriteTime  -gt (Get-Date).AddHours(-22))  { return }
+    if ((Test-Path $tried) -and (Get-Item $tried).LastWriteTime -gt (Get-Date).AddMinutes(-30)) { return }
+    Set-Content $tried (Get-Date -Format s)
+    $history = if (Test-Path $History) { Get-Content $History -Raw } else { $null }
+    Send-ToBrad "Daily log (automatic, until $($DailyUntil.ToString('yyyy-MM-dd')))" (Get-Report -Daily) $history
+    Set-Content $sent (Get-Date -Format s)
+}
+
+if ($ReportOnly) { Get-Report -Daily:$DailyReport; return }
 
 if ($Setup) {
     Install-Parts
@@ -627,6 +647,7 @@ if ($Record) {
     try { $req = Get-Request; if ($req -and $req.Kind -eq 'check') { Invoke-Request $req } } catch { }
     # Once an hour, take a signed update without waiting for a click.
     if ((Get-Date).Minute -lt 5) { try { & (Join-Path $Dir 'Launcher.ps1') -UpdateOnly } catch { } }
+    try { Send-DailyLog } catch { }
     return
 }
 
@@ -745,4 +766,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: s6rw+j98X6MPqqbJuQw2+DkHFjr2T8N+y3J6/xORPqhpBNSD192xqwVCcsv8IU7kqfYYO6Vo/7fFyT5RH8Nt7hzSbCh+wQ62AXO6gVKW5sMSXxKEQoCj5kzb0FXQtYmru5NilTLnpQXI7Dysu/xWi8vg0AK+DEkjjCKW0J83w4hV5LbtqcZxkAHQFkuyCrzhkMyteZqxzqSqSIw8Ms1EMpkZRmwyzayuaypug8rptmkARaSJfdK9nZFTvi0Qa70W/ZDyesCrDKeG9pR/CKk7bEu3lYHjAgxhk9Sfp7RfITqp1B3GAby7o9LJS5mccXuN5TRRuh7YJSyzUMzCDa9iVpzvcqKksJVlVDHfCghMuUfqbLCIxWg5oygJfNETnL8zyYQon0SHExwOeJeftNMc2gx7Iqia/W5HLV2HOU/OhUa8wWJfraMLv0XJhvvYik2Nky9QK8PRdp9P6zKQl+mFgjr+kj2zya4kj4kDy3GYWh6ZyzLZ44uiM7o/f1LxnnpY
+# signature: fi1SYGK5xd0wb/+0zfK9iTdca8c+/3Xu1ArQJurL1WO+VldKN0FLLWy/YzgJ9JWTRZUfmVwsPGcBNf0+okD1KT4btcRDWUpLTImUI+mCRy+bnDqjtO/boYStCJGFGejz9mJM4vnofXLKBqMbmdJk3us/bEkODPYTFrWpt9Bg4pOk2pAHuOyPVXKkdixIeofBOmfjdbSBkBcgMfYRpDh/V3ic8kn5oLsi2UksQgi/tfT1oCrcUxpXOp7DtzKcuF21poQR8vWy7WEGOtxHntGvplC48goi19PgcaMroMqAA+LjVSAl7XRQxI4oxH7l7GKdSWolhB5IO+7l3yXtFiUT27jDWShDxcD4MRbujbSZzxo/+63SBDvhB2KeaPOTaA632RFECCFYHvfIjVW19WgmsB71c9ULTABRXPGSl0pyOGFeHOcR0lvu3StEfXIrqNjjHj0BSIOVG4JeSao/Nt/zfkkRBxtD9ILI8l4te6xwgYApD13P8NFEBmWPBff6W4p7
