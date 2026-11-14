@@ -8,12 +8,14 @@
 # Test without the window:  powershell -ExecutionPolicy Bypass -File ComputerHelp.ps1 -ReportOnly
 param([switch]$ReportOnly, [switch]$Record, [switch]$Setup)
 
-$Version   = '2026.11.13.1'
+$Version   = '2026.11.14.1'
 $Dir       = $PSScriptRoot
 $RepoRaw   = 'https://raw.githubusercontent.com/AyaProfiles/computer-help/main'
 $TaskName  = 'Computer Help recorder'
 $History   = Join-Path $Dir 'history.csv'
 $DoneFile  = Join-Path $Dir 'requests-done.txt'
+$Snapshot  = Join-Path $Dir 'snapshot.json'
+$Changes   = Join-Path $Dir 'changes.csv'
 $Inventory = Join-Path $Dir 'folders.json'
 $PublicKey = '<RSAKeyValue><Modulus>u5MDLLOaAuRnhR2cR9Gn9GB+cOnKjL3+IHiOYV8GflxGN3miag4S/yBPsaGfAdWsMpPVbagUBoy4OXkxDTmT9ddsO0o7RYJvJrcKHZ0RvLKh0DdACsmcHEPoMVrwpy21E3UeMNWUsKFG67s12x+if6aErMuAMMI45hIhxpK5Jgs3DEzGgtvrvCXv0xPpVo2WjrtwuizIa+9HJcu60POLIRvNMTINqkoO9mNfsVEqlYcbjiwt3Pv28AQxoT0m0wk4wWmZj6IOj8KQUgxTKkRDpPbNLbw/AfkliSrqyrMwWpzCiePP4Gp9pstihwKyzJQaXkTcOvdwO3FaKuiae9SrIPNYWWtgkR+dX8nNbGT521WKPjKIEp6mhZWrKejMaxNCeJ2f+EPphPw+XPYM4MQdcaag5SfGLC5CJyPloMGXSxKiMCD307Q5mR9bP5e8Cwpp1ZEpeK1yv/+NCEijqJHLA30NHIUv7xHP6vyhZ0kb+T5GBQ6eDE9vK4Uihf677Xnd</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
@@ -129,14 +131,21 @@ function Save-Sample {
     $disk  = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
     $online = Test-Connection 1.1.1.1 -Count 1 -Quiet
     $wifi  = (netsh wlan show interfaces | Select-String '^\s*Signal\s*:\s*(\d+)%' | Select-Object -First 1).Matches.Groups[1].Value
+    # A failure in the extras must never cost the whole sample.
+    $edge  = try { Get-EdgeInfo } catch { $null }
+    # Page timing only when online; -1 means no answer within 10 seconds.
+    $loginMs   = if ($online) { try { Get-LoadMs 'https://login.live.com/' } catch { '' } } else { '' }
+    $outlookMs = if ($online) { try { Get-LoadMs 'https://outlook.live.com/mail/' } catch { '' } } else { '' }
+    $upMin = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalMinutes)
     # Whole numbers only, so no locale can put a comma inside a CSV field.
     $line = @((Get-Date -Format 'yyyy-MM-dd HH:mm'), $cpu,
               [math]::Round(100 * (1 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize)),
               [math]::Round($disk.FreeSpace / 1GB),
               ($top.Name -replace '#\d+$', ''), [math]::Round($top.PercentProcessorTime / $cores),
-              $mem.Name, [math]::Round($mem.MB), [int]$online, $wifi) -join ','
-    # Older files lack the Wi-Fi column: give them the new header, old rows just leave it empty.
-    $header = 'Time,CpuPct,MemUsedPct,DiskFreeGB,TopCpuProgram,TopCpuPct,TopMemProgram,TopMemMB,Online,WifiPct'
+              $mem.Name, [math]::Round($mem.MB), [int]$online, $wifi,
+              $edge.Procs, $edge.MB, $edge.Pages, $edge.Start, $edge.Version, $loginMs, $outlookMs, $upMin) -join ','
+    # Older files lack the newer columns: give them the new header, old rows just leave them empty.
+    $header = 'Time,CpuPct,MemUsedPct,DiskFreeGB,TopCpuProgram,TopCpuPct,TopMemProgram,TopMemMB,Online,WifiPct,EdgeProcs,EdgeMB,EdgePages,EdgeStart,EdgeVer,LoginMs,OutlookMs,UptimeMin'
     if (-not (Test-Path $History)) { Set-Content $History $header }
     elseif ((Get-Content $History -TotalCount 1) -ne $header) { $all = @(Get-Content $History); $all[0] = $header; Set-Content $History $all }
     Add-Content $History $line
@@ -163,6 +172,34 @@ function Get-HistorySummary {
     $down = @($rows | Where-Object { $_.Online -eq '0' })
     "Internet down: $($down.Count) of $($rows.Count) checks$(if ($down) { ", last at $($down[-1].Time)" })"
     "C: free space: $($rows[0].DiskFreeGB) GB at the start, $($rows[-1].DiskFreeGB) GB now"
+    $edge = @($rows | Where-Object { "$($_.EdgeMB)" -match '^\d+$' })
+    if ($edge) {
+        $big = $edge | Sort-Object { [int]$_.EdgeMB } -Descending | Select-Object -First 1
+        "Edge memory: average {0:N0} MB, biggest {1:N0} MB at {2} ({3} pages open then)" -f ($edge | ForEach-Object { [int]$_.EdgeMB } | Measure-Object -Average).Average, [int]$big.EdgeMB, $big.Time, $big.EdgePages
+        $starts = @($edge | Where-Object { $_.EdgeStart } | Select-Object -ExpandProperty EdgeStart -Unique)
+        "Edge was started $($starts.Count) times; latest: $((@($starts | Select-Object -Last 4)) -join ', ')"
+        "Edge versions seen: $((@($edge | Where-Object { $_.EdgeVer } | Select-Object -ExpandProperty EdgeVer -Unique)) -join ', ')"
+    }
+    foreach ($site in @(@('LoginMs', 'Sign-in site (login.live.com)'), @('OutlookMs', 'Outlook site (outlook.live.com)'))) {
+        $all = @($rows | Where-Object { "$($_.($site[0]))" -match '^-?\d+$' })
+        $ms = @($all | ForEach-Object { [int]$_.($site[0]) } | Where-Object { $_ -ge 0 } | Sort-Object)
+        if ($ms) {
+            "{0} answer time: median {1} ms, slowest {2} ms, over 2 s: {3} of {4} checks, no answer: {5}" -f $site[1], $ms[[int][math]::Floor(($ms.Count - 1) / 2)], $ms[-1], @($ms | Where-Object { $_ -gt 2000 }).Count, $all.Count, ($all.Count - $ms.Count)
+        }
+    }
+    $post = @($rows | Where-Object { "$($_.UptimeMin)" -match '^\d+$' -and [int]$_.UptimeMin -lt 10 })
+    if ($post) {
+        $rest = @($rows | Where-Object { "$($_.UptimeMin)" -match '^\d+$' -and [int]$_.UptimeMin -ge 10 })
+        "Processor in the first 10 minutes after start-up: average {0:N0}% ({1} samples), later: {2:N0}%" -f ($post | ForEach-Object { [int]$_.CpuPct } | Measure-Object -Average).Average, $post.Count, $(if ($rest) { ($rest | ForEach-Object { [int]$_.CpuPct } | Measure-Object -Average).Average } else { 0 })
+    }
+    # A hole in the samples means the PC was off or asleep (or the recorder did not run).
+    $times = @($rows | ForEach-Object { [datetime]::ParseExact($_.Time, 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) })
+    $gaps = for ($i = 1; $i -lt $times.Count; $i++) {
+        $mins = ($times[$i] - $times[$i - 1]).TotalMinutes
+        if ($mins -gt [math]::Max(15, 2.5 * $RecordMinutes)) { "{0:MM-dd HH:mm} to {1:MM-dd HH:mm} ({2:N1} h)" -f $times[$i - 1], $times[$i], ($mins / 60) }
+    }
+    $gaps = @($gaps)
+    "Gaps with no samples (PC off or asleep): $($gaps.Count)$(if ($gaps) { '; latest: ' + ((@($gaps | Select-Object -Last 4)) -join ', ') })"
     $sig = @($rows | Where-Object { "$($_.WifiPct)" -match '^\d+$' })
     if ($sig) {
         $weak = @($sig | Where-Object { [int]$_.WifiPct -lt 40 })
@@ -193,6 +230,85 @@ function Get-InstalledPrograms {
                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
                        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
       Where-Object { $_.DisplayName })
+}
+
+# ---- Edge, extensions, page timing, changes ----
+function Get-EdgeInfo {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue)
+    if (-not $procs) { return $null }
+    $main  = $procs | Where-Object { $_.CommandLine -notmatch '--type=' } | Sort-Object CreationDate | Select-Object -First 1
+    $pages = @($procs | Where-Object { $_.CommandLine -match '--type=renderer' -and $_.CommandLine -notmatch '--extension-process' }).Count
+    [pscustomobject]@{
+        Procs   = $procs.Count
+        MB      = [math]::Round(($procs | Measure-Object WorkingSetSize -Sum).Sum / 1MB)
+        Pages   = $pages
+        Start   = if ($main) { $main.CreationDate.ToString('yyyy-MM-dd HH:mm') } else { '' }
+        Version = if ($main -and $main.ExecutablePath) { (Get-Item $main.ExecutablePath).VersionInfo.ProductVersion } else { '' }
+    }
+}
+
+# Edge keeps no "state" value: an extension is on when it has no disable_reasons flag.
+function Get-EdgeExtensionList {
+    $root = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
+    foreach ($prof in Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' }) {
+        $settings = $null
+        try { $settings = (Get-Content (Join-Path $prof.FullName 'Secure Preferences') -Raw -ErrorAction Stop | ConvertFrom-Json).extensions.settings } catch { }
+        foreach ($e in Get-ChildItem (Join-Path $prof.FullName 'Extensions') -Directory -ErrorAction SilentlyContinue) {
+            $m = Get-ChildItem $e.FullName -Recurse -Filter manifest.json -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $m) { continue }
+            $j = Get-Content $m.FullName -Raw | ConvertFrom-Json
+            $name = "$($j.name)"
+            if ($name -match '^__MSG_(.+)__$') {
+                $key = $Matches[1]
+                foreach ($loc in 'en', 'en_US', $j.default_locale) {
+                    $f = Join-Path $m.DirectoryName "_locales\$loc\messages.json"
+                    if ($loc -and (Test-Path $f)) {
+                        $hit = (Get-Content $f -Raw | ConvertFrom-Json).PSObject.Properties | Where-Object { $_.Name -ieq $key } | Select-Object -First 1
+                        if ($hit) { $name = $hit.Value.message; break }
+                    }
+                }
+            }
+            $entry = if ($settings) { $settings.PSObject.Properties[$e.Name] } else { $null }
+            $reasons = if ($entry) { $entry.Value.disable_reasons } else { $null }
+            [pscustomobject]@{ Name = $name; Version = "$($j.version)"; On = [bool]($entry -and (-not $reasons -or $reasons -eq 0)); Known = [bool]$entry }
+        }
+    }
+}
+
+# Milliseconds until the site answers (any answer counts, Outlook turns scripts away with 403); -1 = no answer.
+function Get-LoadMs($url) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try { Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 3 -UserAgent ([Microsoft.PowerShell.Commands.PSUserAgent]::Chrome) | Out-Null }
+    catch { if (-not $_.Exception.Response) { return -1 } }
+    [int]$sw.Elapsed.TotalMilliseconds
+}
+
+# Compares programs and Edge extensions with the last sample and logs what was added, removed or changed.
+# The very first run only takes the baseline.
+function Save-Changes {
+    $now = @{}
+    foreach ($a in Get-InstalledPrograms) { if ("$($a.DisplayName)".Trim()) { $now["program|$("$($a.DisplayName)".Trim())"] = "$($a.DisplayVersion)" } }
+    foreach ($e in Get-EdgeExtensionList) { $now["extension|$($e.Name)"] = "$(if ($e.On) { 'on' } else { 'off' }) v$($e.Version)" }
+    $old = if (Test-Path $Snapshot) { Get-Content $Snapshot -Raw | ConvertFrom-Json } else { $null }
+    if ($old) {
+        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        $lines = @()
+        foreach ($k in $now.Keys) {
+            $kind, $name = $k -split '\|', 2
+            $was = $old.PSObject.Properties[$k]
+            if (-not $was) { $lines += "$stamp,$kind added,$($name -replace ',', ' ')" }
+            elseif ("$($was.Value)" -ne $now[$k]) { $lines += "$stamp,$kind changed,$(($name -replace ',', ' ') + ' (' + $was.Value + ' -> ' + $now[$k] + ')')" }
+        }
+        foreach ($p in $old.PSObject.Properties) {
+            if (-not $now.ContainsKey($p.Name)) { $kind, $name = $p.Name -split '\|', 2; $lines += "$stamp,$kind removed,$($name -replace ',', ' ')" }
+        }
+        if ($lines) {
+            if (-not (Test-Path $Changes)) { Set-Content $Changes 'Time,What,Detail' }
+            Add-Content $Changes $lines
+            if ((Get-Item $Changes).Length -gt 100KB) { $all = Get-Content $Changes; Set-Content $Changes (@($all[0]) + $all[-800..-1]) }
+        }
+    }
+    $now | ConvertTo-Json | Set-Content $Snapshot
 }
 
 # ---- Brad's checks and fixes (requests/<id>.ps1 in the repo, signed) ----
@@ -314,6 +430,14 @@ function Get-Report {
             "New Outlook app: $(if ($newOutlook) { "installed ($($newOutlook.Version))" } else { 'not installed' })"
             if (Get-AppxPackage microsoft.windowscommunicationsapps -ErrorAction SilentlyContinue) { 'Old Windows Mail app: installed (retired by Microsoft)' }
         }
+        Section 'Edge extensions (on = no disable flag)' {
+            $ext = @(Get-EdgeExtensionList)
+            if (-not $ext) { 'None found' }
+            $ext | ForEach-Object { "  $($_.Name): $(if (-not $_.Known) { 'unknown' } elseif ($_.On) { 'ON' } else { 'off' }), v$($_.Version)" }
+            if (@($ext | Where-Object { $_.On -and $_.Name -match 'ad ?block|ublock|adguard' }).Count -ge 2) { 'NOTE: two ad blockers are on at the same time; they can slow pages down.' }
+            $e = Get-EdgeInfo
+            if ($e) { "Edge now: $($e.Procs) processes, $($e.MB) MB, about $($e.Pages) pages open, started $($e.Start), version $($e.Version)" } else { 'Edge is not running.' }
+        }
         Section 'Where files are saved' {
             $od = @(Get-ChildItem 'HKCU:\Software\Microsoft\OneDrive\Accounts' -ErrorAction SilentlyContinue |
                     Where-Object { (Get-ItemProperty $_.PSPath).UserEmail } | ForEach-Object { $_.PSChildName -replace '\d+$', '' })
@@ -385,6 +509,56 @@ function Get-Report {
                 ForEach-Object { $_.Properties[0].Value } | Group-Object | Sort-Object Count -Descending | Select-Object -First 5
             "Programs that crashed: $(($crashes | ForEach-Object { "$($_.Name) ($($_.Count)x)" }) -join ', ')"
         }
+        Section 'Power on, off and sleep (last 7 days)' {
+            $map = @{
+                'Microsoft-Windows-Kernel-General|12' = 'PC started'
+                'Microsoft-Windows-Kernel-General|13' = 'PC shut down'
+                'Microsoft-Windows-Kernel-Power|42' = 'went to sleep'
+                'Microsoft-Windows-Power-Troubleshooter|1' = 'woke up'
+                'Microsoft-Windows-Kernel-Power|41' = 'UNEXPECTED shutdown (power loss, crash or held power button)'
+                'Microsoft-Windows-Kernel-Power|506' = 'standby'
+                'Microsoft-Windows-Kernel-Power|507' = 'standby ended'
+            }
+            $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $since; ProviderName = 'Microsoft-Windows-Kernel-General', 'Microsoft-Windows-Kernel-Power', 'Microsoft-Windows-Power-Troubleshooter' } -ErrorAction SilentlyContinue |
+                    Where-Object { $map.ContainsKey("$($_.ProviderName)|$($_.Id)") } | Sort-Object TimeCreated)
+            $standby = @($ev | Where-Object { $_.Id -in 506, 507 })
+            "Short standby periods (screen off, PC still on): $($standby.Count)"
+            $main = @($ev | Where-Object { $_.Id -notin 506, 507 })
+            if (-not $main) { 'No start, shut down or sleep entries found.' }
+            $main | Select-Object -Last 30 | ForEach-Object { "  {0:MM-dd HH:mm} {1}" -f $_.TimeCreated, $map["$($_.ProviderName)|$($_.Id)"] }
+        }
+        Section 'Start-up speed' {
+            $log = 'Microsoft-Windows-Diagnostics-Performance/Operational'
+            # Windows only lets administrators read this log; the recorder is not one. The processor figure
+            # for the first 10 minutes after start-up (in the history above) is the fallback.
+            if (-not (Get-WinEvent -ListLog $log -ErrorAction SilentlyContinue)) { return 'Windows start-up timings need administrator rights, so they cannot be read from here. See the processor figure for the first 10 minutes after start-up above.' }
+            $boots = @(Get-WinEvent -FilterHashtable @{ LogName = $log; Id = 100 } -MaxEvents 6 -ErrorAction SilentlyContinue)
+            if (-not $boots) { 'No start-up timings recorded by Windows.' }
+            foreach ($b in $boots) {
+                $x = [xml]$b.ToXml()
+                $ms = [int](($x.Event.EventData.Data | Where-Object Name -eq 'BootTime').'#text')
+                "  {0:MM-dd HH:mm}: start-up took {1:N0} seconds" -f $b.TimeCreated, ($ms / 1000)
+            }
+            $apps = @(Get-WinEvent -FilterHashtable @{ LogName = $log; Id = 101; StartTime = (Get-Date).AddDays(-14) } -MaxEvents 200 -ErrorAction SilentlyContinue | ForEach-Object {
+                $d = ([xml]$_.ToXml()).Event.EventData.Data
+                $n = ($d | Where-Object Name -eq 'FriendlyName').'#text'
+                if (-not $n) { $n = ($d | Where-Object Name -eq 'Name').'#text' }
+                [pscustomobject]@{ Name = $n; Seconds = [int](($d | Where-Object Name -eq 'TotalTime').'#text') / 1000 }
+            })
+            if ($apps) {
+                'Programs Windows flagged as slow to start (last 14 days):'
+                $apps | Group-Object Name | Sort-Object Count -Descending | Select-Object -First 5 |
+                    ForEach-Object { "  {0}: {1}x, average {2:N0} s" -f $_.Name, $_.Count, ($_.Group | Measure-Object Seconds -Average).Average }
+            } else { 'Windows flagged no slow-starting programs in the last 14 days.' }
+        }
+        Section 'Changes noticed (programs and Edge extensions, last 14 days)' {
+            if (-not (Test-Path $Changes)) { return 'Nothing yet. Changes are noticed from the first recording on.' }
+            $cut = (Get-Date).AddDays(-14).ToString('yyyy-MM-dd HH:mm')
+            $rows = @(Import-Csv $Changes | Where-Object { $_.Time -ge $cut })
+            if (-not $rows) { 'No changes.' }
+            $rows | Select-Object -Last 40 | ForEach-Object { "  $($_.Time) $($_.What): $($_.Detail)" }
+            if ($rows.Count -gt 40) { "  (and $($rows.Count - 40) older ones)" }
+        }
         Section 'Reliability history (Windows, last 30 days)' {
             $r = @(Get-CimInstance Win32_ReliabilityRecords | Where-Object { $_.TimeGenerated -gt (Get-Date).AddDays(-30) } |
                    Sort-Object TimeGenerated -Descending)
@@ -446,6 +620,7 @@ if ($Setup) {
 if ($Record) {
     try { Install-Parts } catch { }
     try { Save-Sample } catch { }
+    try { Save-Changes } catch { }
     try { if (-not (Test-Path $Inventory) -or (Get-Item $Inventory).LastWriteTime -lt (Get-Date).AddHours(-20)) { Save-Inventory } } catch { }
     try { $req = Get-Request; if ($req -and $req.Kind -eq 'check') { Invoke-Request $req } } catch { }
     # Once an hour, take a signed update without waiting for a click.
@@ -568,4 +743,4 @@ $closeButton.Add_Click({ $form.Close() })
 
 [void]$form.ShowDialog()
 # end-of-computer-help
-# signature: XqfvGAIu6j+uIwEpil3SkhMezIdIzVn9/fLySKtxjnKhxTpanaoAPn/Hg0YpIfRIle2rt10w0a90tXiwncZTzxL3usv5I4mFXQtpJEtNsNLec3Xe+LZy9u+51hl4qNtiPLATWFBpkguk32Q63uDNlEriSeRYFxlBOs3YZR7c9jTrdRxuGmWcKtMT9TRayMhLbA4iTh5KX2YYNQRWXnWMBkkpITwnAwKRW9hWW1e6BKTPTwa7KHtSBne1GltCCxQNsohGKrxndE8ht8SyvSSiNwQyQWeBH7Vy/aQ5cfesZltoZ9H90q3/YqtKItMZgtJX76fvK4FLTbgdwxVKhYQqnj6sSOobRs2b4r4lbR+xu3FN+UZsS279BLWbWUyhhHNQO9Y4PqBGyP9l6oI41maO9etby8q1lLYpCH36GP3v8Fd/moGiCx8soEXk5R9hxYKub0Ud08TQ2c5miOIFlFJj0FU8M4+tYtkahwTOuIqrieDuqzcnhSKVhbBNzPU/26j4
+# signature: Ghr4iA8CcAuIvok1YXDq7P5d86CEobRqX1GaEU5HK6WLormvEyBDxmOnW4wsSQJfhIGnFVD1T++jxAKPMwIw7x88F8aHsgbUPCuOFNkNe28BhpYNk73VirC3QJH2ww89HlhOjdje0YpPx67jwzLdOMA//Yjo/eLZp9Sh72p0b2wb2PnQOCpSrMFCqShDxvnIr1RBToiDyNs+C23/9qg6sxZL0SAt1a7iqRmnBAz0Kcb3m9Hww9CY1cV3qNpBqo2Ibcyp3HE0GR23+0G7xTk4J6mbIIBzSsF//VF2/E0Db/ZVv+ShtbTpvWpk4loNPqg79bw4+erRvDtXgYYNqyA/dcVffRYUg203zMaI405+Ldbv1TgBM2+hmsJ6CEJa0oWrV9x5/PqSJu/WaC1Yrt/ZQEcmFKhxpsMk//ix4HsG4vnrYpQKPKDgp6hj6iFJq2LUyMFqObHCe3Q9J3l1rZYFoFB1ddQxHSD+ubmLZTPzFG0Nml2sCpRZNyTK6towsTMy

@@ -20,7 +20,8 @@ All files live in `%LOCALAPPDATA%\ComputerHelp`:
 - `ComputerHelp.ps1`
 - `Launcher.ps1` (written by `ComputerHelp.ps1`)
 - `config.json` (local only, never in this repo)
-- `history.csv`
+- `history.csv` (every 5 minutes: processor, memory, disk, busiest programs, internet and Wi-Fi, Edge processes/memory/pages/start time/version, answer time of login.live.com and outlook.live.com, minutes since start-up)
+- `snapshot.json` and `changes.csv` (programs and Edge extensions added, removed or changed since the last sample)
 - `requests-done.txt`
 
 ## Changing anything
